@@ -416,6 +416,20 @@ small {
     color: var(--text-secondary);
 }
 
+.global-counter {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    font-size: 14px;
+}
+
+.global-counter strong {
+    font-size: 22px;
+    color: var(--primary-color);
+}
+
 .rollback-row {
     display: flex;
     align-items: center;

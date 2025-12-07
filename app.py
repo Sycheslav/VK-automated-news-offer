@@ -19,9 +19,13 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
-# Глобальные переменные для SSE логов
+# Глобальные переменные для SSE логов и статистики
 log_queues = {}
 active_tasks = {}
+stats_lock = threading.Lock()
+global_stats = {
+    'total_success': 0
+}
 
 
 def allowed_file(filename):
@@ -78,6 +82,14 @@ def api_verify_token():
             'success': False,
             'error': f'Ошибка проверки токена: {str(e)}'
         }), 400
+
+
+@app.route('/api/global-stats', methods=['GET'])
+def api_global_stats():
+    """Глобальная статистика (всего успешных отправок)."""
+    with stats_lock:
+        total = global_stats['total_success']
+    return jsonify({'total_success': total})
 
 
 @app.route('/api/upload-photo', methods=['POST'])
@@ -207,12 +219,20 @@ def api_auto_subscribe():
         subscribed = 0
         failed = 0
         errors = []
+        subscribed_ids = []
         
-        for gid in group_ids:
+        for raw_gid in group_ids:
+            try:
+                gid = int(raw_gid)
+            except (TypeError, ValueError):
+                failed += 1
+                errors.append(f"Некорректный ID группы: {raw_gid}")
+                continue
             try:
                 result = suggester.join_group(gid)
                 if result:
                     subscribed += 1
+                    subscribed_ids.append(gid)
                 else:
                     failed += 1
             except VKApiError as e:
@@ -227,7 +247,8 @@ def api_auto_subscribe():
             'total': len(group_ids),
             'subscribed': subscribed,
             'failed': failed,
-            'errors': errors[:10]  # Первые 10 ошибок
+            'errors': errors[:10],  # Первые 10 ошибок
+            'subscribed_ids': subscribed_ids
         })
         
     except VKApiError as e:
@@ -283,6 +304,62 @@ def api_rollback():
             'deleted': deleted,
             'failed': failed,
             'errors': errors[:10]  # показываем первые 10 ошибок
+        })
+    except VKApiError as e:
+        return jsonify({'success': False, 'error': f'Ошибка VK API: {e.message}'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auto-unsubscribe', methods=['POST'])
+def api_auto_unsubscribe():
+    """Автоматическая отписка от списка групп."""
+    data = request.get_json()
+    token = data.get('token', '').strip()
+    group_ids = data.get('group_ids', [])
+    
+    if not token:
+        return jsonify({'error': 'Токен не указан'}), 400
+    
+    if not group_ids:
+        return jsonify({'error': 'Список групп пуст'}), 400
+    
+    try:
+        suggester = VKSuggester(access_token=token, request_delay=0.5)
+        
+        left = 0
+        failed = 0
+        errors = []
+        left_ids = []
+        
+        for raw_gid in group_ids:
+            try:
+                gid = int(raw_gid)
+            except (TypeError, ValueError):
+                failed += 1
+                errors.append(f"Некорректный ID группы: {raw_gid}")
+                continue
+            try:
+                result = suggester.leave_group(gid)
+                if result:
+                    left += 1
+                    left_ids.append(gid)
+                else:
+                    failed += 1
+            except VKApiError as e:
+                failed += 1
+                errors.append(f"Группа {gid}: {e.message}")
+            except Exception as e:
+                failed += 1
+                errors.append(f"Группа {gid}: {str(e)}")
+        
+        return jsonify({
+            'success': True,
+            'total': len(group_ids),
+            'left': left,
+            'failed': failed,
+            'errors': errors[:10],
+            'left_ids': left_ids
         })
     except VKApiError as e:
         return jsonify({'success': False, 'error': f'Ошибка VK API: {e.message}'}), 400
@@ -413,6 +490,11 @@ def run_posting_task(task_id, token, message, groups, photos, photo_links, delay
             
             info = groups_info.get(gid)
             group_name = info.name if info else f"Группа {gid}"
+            screen_name = None
+            if info and info.screen_name:
+                screen_name = info.screen_name
+            elif identifier and not identifier.isdigit():
+                screen_name = identifier
             
             # Проверяем возможность отправки
             if info and not info.can_suggest and not info.can_post:
@@ -423,6 +505,7 @@ def run_posting_task(task_id, token, message, groups, photos, photo_links, delay
                     'total': len(resolved),
                     'group': group_name,
                     'group_id': gid,
+                    'screen_name': screen_name,
                     'status': 'suggest_disabled',
                     'success': False,
                     'error': 'Предложка закрыта'
@@ -442,6 +525,7 @@ def run_posting_task(task_id, token, message, groups, photos, photo_links, delay
                     'total': len(resolved),
                     'group': group_name,
                     'group_id': gid,
+                    'screen_name': screen_name,
                     'status': 'success',
                     'success': True,
                     'post_id': result.post_id
@@ -455,6 +539,7 @@ def run_posting_task(task_id, token, message, groups, photos, photo_links, delay
                     'total': len(resolved),
                     'group': group_name,
                     'group_id': gid,
+                    'screen_name': screen_name,
                     'status': result.status.value,
                     'success': False,
                     'error': error_msg
@@ -469,12 +554,17 @@ def run_posting_task(task_id, token, message, groups, photos, photo_links, delay
         log_callback("=" * 50)
         log_callback(f"Завершено! Успешно: {success_count}/{len(resolved)}")
         
+        with stats_lock:
+            global_stats['total_success'] += success_count
+            total_success_global = global_stats['total_success']
+        
         q.put({
             'type': 'complete',
             'success': True,
             'total': len(resolved),
             'success_count': success_count,
-            'failed_count': len(resolved) - success_count
+            'failed_count': len(resolved) - success_count,
+            'total_success_global': total_success_global
         })
         
     except Exception as e:

@@ -143,6 +143,14 @@ club12345"></textarea>
                     </div>
                 </div>
 
+                <div class="global-counter">
+                    <span>Общий счётчик успешных отправок:</span>
+                    <strong id="global-success">0</strong>
+                    <button type="button" id="btn-refresh-global" class="btn btn-secondary btn-small">
+                        🔄 Обновить
+                    </button>
+                </div>
+
                 <div class="rollback-row">
                     <button type="button" id="btn-rollback" class="btn btn-danger" disabled>
                         ↩️ Откатить рассылку
@@ -173,6 +181,9 @@ club12345"></textarea>
                             </button>
                             <button type="button" id="btn-auto-subscribe" class="btn btn-primary">
                                 👥 Автоподписаться на паблики
+                            </button>
+                            <button type="button" id="btn-auto-unsubscribe" class="btn btn-secondary" disabled>
+                                🚫 Автоотписаться
                             </button>
                         </div>
                     </div>
@@ -211,6 +222,8 @@ club12345"></textarea>
         let failedCount = 0;
         let failedGroups = [];  // Список неуспешных групп
         let sentPosts = [];     // Успешно отправленные посты (для отката)
+        let globalSuccessTotal = 0; // Общий счётчик
+        let autoSubscribedGroups = []; // Последние автоподписки
 
         // Элементы DOM
         const elements = {
@@ -239,6 +252,8 @@ club12345"></textarea>
             progressText: document.getElementById('progress-text'),
             statSuccess: document.getElementById('stat-success'),
             statFailed: document.getElementById('stat-failed'),
+            globalSuccess: document.getElementById('global-success'),
+            btnRefreshGlobal: document.getElementById('btn-refresh-global'),
             btnRollback: document.getElementById('btn-rollback'),
             rollbackHint: document.getElementById('rollback-hint'),
             logsSuccess: document.getElementById('logs-success'),
@@ -247,6 +262,7 @@ club12345"></textarea>
             btnClearFailedLogs: document.getElementById('btn-clear-failed-logs'),
             btnGetFailedList: document.getElementById('btn-get-failed-list'),
             btnAutoSubscribe: document.getElementById('btn-auto-subscribe'),
+            btnAutoUnsubscribe: document.getElementById('btn-auto-unsubscribe'),
             failedListModal: document.getElementById('failed-list-modal'),
             failedListText: document.getElementById('failed-list-text'),
             btnCopyFailedList: document.getElementById('btn-copy-failed-list'),
@@ -400,6 +416,16 @@ club12345"></textarea>
             renderParsedPhotos();
         }
 
+        function buildGroupUrl(group) {
+            if (group.screen_name) {
+                return `https://vk.com/${group.screen_name}`;
+            }
+            if (group.group_id) {
+                return `https://vk.com/club${group.group_id}`;
+            }
+            return null;
+        }
+
         // Загрузка фото - клик
         elements.uploadPlaceholder.addEventListener('click', () => {
             elements.photoInput.click();
@@ -499,6 +525,8 @@ club12345"></textarea>
         elements.btnClearSuccessLogs.addEventListener('click', () => clearLogsContainer('success'));
         elements.btnClearFailedLogs.addEventListener('click', () => clearLogsContainer('failed'));
         elements.btnRollback.addEventListener('click', rollbackPosts);
+        elements.btnRefreshGlobal.addEventListener('click', fetchGlobalStats);
+        elements.btnAutoUnsubscribe.addEventListener('click', autoUnsubscribe);
 
         async function startPosting() {
             const token = elements.token.value.trim();
@@ -612,7 +640,8 @@ club12345"></textarea>
                                 name: data.group,
                                 status: data.status,
                                 error: data.error,
-                                group_id: data.group_id
+                                group_id: data.group_id,
+                                screen_name: data.screen_name
                             });
                             addLogFailed(`✗ ${data.group}: ${data.error || data.status}`, 'warning');
                         }
@@ -627,6 +656,10 @@ club12345"></textarea>
                             if (data.failed_count > 0) {
                                 addLogFailed(`Ошибки: ${data.failed_count}`, 'warning');
                             }
+                        }
+                        if (typeof data.total_success_global === 'number') {
+                            globalSuccessTotal = data.total_success_global;
+                            updateGlobalCounter();
                         }
                         updateRollbackState();
                         eventSource.close();
@@ -680,6 +713,32 @@ club12345"></textarea>
             elements.statFailed.textContent = failedCount;
         }
 
+        async function fetchGlobalStats() {
+            try {
+                const response = await fetch('/api/global-stats');
+                const data = await response.json();
+                if (typeof data.total_success === 'number') {
+                    globalSuccessTotal = data.total_success;
+                    updateGlobalCounter();
+                }
+            } catch (error) {
+                console.warn('Не удалось получить глобальную статистику', error);
+            }
+        }
+
+        function updateGlobalCounter() {
+            elements.globalSuccess.textContent = globalSuccessTotal;
+        }
+
+        function updateAutoUnsubscribeState() {
+            autoSubscribedGroups = autoSubscribedGroups.filter(id => !Number.isNaN(Number(id)));
+            const hasGroups = autoSubscribedGroups.length > 0;
+            elements.btnAutoUnsubscribe.disabled = !hasGroups;
+            elements.btnAutoUnsubscribe.textContent = hasGroups
+                ? `🚫 Автоотписаться (${autoSubscribedGroups.length})`
+                : '🚫 Автоотписаться';
+        }
+
         function updateRollbackState() {
             const hasPosts = sentPosts.length > 0;
             elements.btnRollback.disabled = !hasPosts;
@@ -731,8 +790,14 @@ club12345"></textarea>
                 return;
             }
             
-            const list = failedGroups.map(g => g.name).join('\n');
-            elements.failedListText.value = list;
+            const links = failedGroups
+                .map(buildGroupUrl)
+                .filter(Boolean);
+            if (links.length === 0) {
+                alert('Нет ссылок для отображения');
+                return;
+            }
+            elements.failedListText.value = links.join('\n');
             elements.failedListModal.style.display = 'flex';
         });
 
@@ -798,6 +863,52 @@ club12345"></textarea>
             }
         }
 
+        // === Автоотписка ===
+        async function autoUnsubscribe() {
+            if (autoSubscribedGroups.length === 0) {
+                alert('Нет подписок для удаления');
+                return;
+            }
+            const token = elements.token.value.trim();
+            if (!token) {
+                alert('Введите токен VK');
+                return;
+            }
+            if (!confirm(`Отписаться от ${autoSubscribedGroups.length} пабликов?`)) {
+                return;
+            }
+            elements.btnAutoUnsubscribe.disabled = true;
+            elements.btnAutoUnsubscribe.textContent = '⏳ Отписка...';
+            try {
+                const response = await fetch('/api/auto-unsubscribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token,
+                        group_ids: autoSubscribedGroups
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    addLogSuccess(`Отписка завершена: ${data.left}/${data.total}`, 'info');
+                    alert(`Отписка завершена!\nУспешно: ${data.left}\nОшибок: ${data.failed}`);
+                    const leftIds = (data.left_ids || []).map(id => Number(id));
+                    if (leftIds.length > 0) {
+                        const leftSet = new Set(leftIds);
+                        autoSubscribedGroups = autoSubscribedGroups.filter(id => !leftSet.has(Number(id)));
+                    }
+                } else {
+                    addLogFailed('Ошибка отписки: ' + data.error, 'error');
+                    alert('Ошибка отписки: ' + data.error);
+                }
+            } catch (error) {
+                addLogFailed('Ошибка отписки: ' + error.message, 'error');
+                alert('Ошибка отписки: ' + error.message);
+            } finally {
+                updateAutoUnsubscribeState();
+            }
+        }
+
         // === Автоподписка на паблики ===
         elements.btnAutoSubscribe.addEventListener('click', async () => {
             if (failedGroups.length === 0) {
@@ -812,8 +923,8 @@ club12345"></textarea>
             }
             
             const groupIds = failedGroups
-                .filter(g => g.group_id)
-                .map(g => g.group_id);
+                .map(g => Number(g.group_id))
+                .filter(id => !Number.isNaN(id) && id > 0);
             
             if (groupIds.length === 0) {
                 alert('Нет доступных ID групп для подписки');
@@ -842,21 +953,28 @@ club12345"></textarea>
                 if (data.success) {
                     addLogSuccess(`Подписка завершена: ${data.subscribed}/${data.total} успешно`, 'info');
                     alert(`Подписка завершена!\nУспешно: ${data.subscribed}\nОшибок: ${data.failed}`);
+                    autoSubscribedGroups = (data.subscribed_ids || []).map(id => Number(id));
                 } else {
                     addLogFailed('Ошибка подписки: ' + data.error, 'error');
                     alert('Ошибка подписки: ' + data.error);
+                    autoSubscribedGroups = [];
                 }
+                updateAutoUnsubscribeState();
             } catch (error) {
                 addLogFailed('Ошибка подписки: ' + error.message, 'error');
                 alert('Ошибка подписки: ' + error.message);
+                autoSubscribedGroups = [];
+                updateAutoUnsubscribeState();
             } finally {
                 elements.btnAutoSubscribe.disabled = false;
                 elements.btnAutoSubscribe.textContent = '👥 Автоподписаться на паблики';
             }
         });
 
-        // Инициализация - сразу генерируем ссылку
+        // Инициализация
         updateRollbackState();
+        updateAutoUnsubscribeState();
+        fetchGlobalStats();
         elements.btnGenerateUrl.click();
     </script>
 </body>

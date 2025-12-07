@@ -398,6 +398,19 @@ class VKSuggester:
             self._log(f"Ошибка подписки на группу {group_id}: {e.message}", "warning")
             raise
     
+    def leave_group(self, group_id: int) -> bool:
+        """
+        Отписка от сообщества.
+        """
+        try:
+            response = self._api_request("groups.leave", {
+                "group_id": group_id
+            })
+            return response == 1
+        except VKApiError as e:
+            self._log(f"Ошибка отписки от группы {group_id}: {e.message}", "warning")
+            raise
+
     def delete_post(self, group_id: int, post_id: int) -> bool:
         """
         Удаление поста/предложки со стены сообщества.
