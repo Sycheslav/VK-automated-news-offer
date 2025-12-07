@@ -416,6 +416,18 @@ small {
     color: var(--text-secondary);
 }
 
+.rollback-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.rollback-row small {
+    margin: 0;
+    color: var(--text-secondary);
+}
+
 /* Logs - Split container */
 .logs-split-container {
     display: flex;

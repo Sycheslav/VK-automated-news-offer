@@ -236,6 +236,60 @@ def api_auto_subscribe():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/rollback', methods=['POST'])
+def api_rollback():
+    """Удаление постов отправленной рассылки."""
+    data = request.get_json()
+    token = data.get('token', '').strip()
+    posts = data.get('posts', [])
+    
+    if not token:
+        return jsonify({'error': 'Токен не указан'}), 400
+    
+    if not posts:
+        return jsonify({'error': 'Список постов пуст'}), 400
+    
+    try:
+        suggester = VKSuggester(access_token=token, request_delay=0.4)
+        
+        deleted = 0
+        failed = 0
+        errors = []
+        
+        for item in posts:
+            gid = int(item.get('group_id', 0) or 0)
+            pid = int(item.get('post_id', 0) or 0)
+            if not gid or not pid:
+                failed += 1
+                errors.append(f"Некорректные данные: {item}")
+                continue
+            
+            try:
+                result = suggester.delete_post(gid, pid)
+                if result:
+                    deleted += 1
+                else:
+                    failed += 1
+            except VKApiError as e:
+                failed += 1
+                errors.append(f"Группа {gid}, пост {pid}: {e.message}")
+            except Exception as e:
+                failed += 1
+                errors.append(f"Группа {gid}, пост {pid}: {str(e)}")
+        
+        return jsonify({
+            'success': True,
+            'total': len(posts),
+            'deleted': deleted,
+            'failed': failed,
+            'errors': errors[:10]  # показываем первые 10 ошибок
+        })
+    except VKApiError as e:
+        return jsonify({'success': False, 'error': f'Ошибка VK API: {e.message}'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/logs/<task_id>')
 def api_logs_stream(task_id):
     """SSE поток логов."""

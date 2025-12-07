@@ -398,6 +398,28 @@ class VKSuggester:
             self._log(f"Ошибка подписки на группу {group_id}: {e.message}", "warning")
             raise
     
+    def delete_post(self, group_id: int, post_id: int) -> bool:
+        """
+        Удаление поста/предложки со стены сообщества.
+        
+        Args:
+            group_id: ID группы (положительное число)
+            post_id: ID поста
+            
+        Returns:
+            True если удаление успешно
+        """
+        try:
+            response = self._api_request("wall.delete", {
+                "owner_id": -group_id,
+                "post_id": post_id
+            })
+            # Успешный ответ: {"response": 1}
+            return response == 1
+        except VKApiError as e:
+            self._log(f"Ошибка удаления поста {post_id} в группе {group_id}: {e.message}", "warning")
+            raise
+
     def post_to_suggestion(
         self,
         group_id: int,

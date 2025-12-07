@@ -143,6 +143,13 @@ club12345"></textarea>
                     </div>
                 </div>
 
+                <div class="rollback-row">
+                    <button type="button" id="btn-rollback" class="btn btn-danger" disabled>
+                        ↩️ Откатить рассылку
+                    </button>
+                    <small id="rollback-hint">Удалит отправленные посты этой сессии</small>
+                </div>
+
                 <div class="logs-split-container">
                     <!-- Успешные логи (слева) -->
                     <div class="logs-container logs-success-container">
@@ -203,6 +210,7 @@ club12345"></textarea>
         let successCount = 0;
         let failedCount = 0;
         let failedGroups = [];  // Список неуспешных групп
+        let sentPosts = [];     // Успешно отправленные посты (для отката)
 
         // Элементы DOM
         const elements = {
@@ -231,6 +239,8 @@ club12345"></textarea>
             progressText: document.getElementById('progress-text'),
             statSuccess: document.getElementById('stat-success'),
             statFailed: document.getElementById('stat-failed'),
+            btnRollback: document.getElementById('btn-rollback'),
+            rollbackHint: document.getElementById('rollback-hint'),
             logsSuccess: document.getElementById('logs-success'),
             logsFailed: document.getElementById('logs-failed'),
             btnClearSuccessLogs: document.getElementById('btn-clear-success-logs'),
@@ -488,6 +498,7 @@ club12345"></textarea>
         elements.btnStop.addEventListener('click', stopPosting);
         elements.btnClearSuccessLogs.addEventListener('click', () => clearLogsContainer('success'));
         elements.btnClearFailedLogs.addEventListener('click', () => clearLogsContainer('failed'));
+        elements.btnRollback.addEventListener('click', rollbackPosts);
 
         async function startPosting() {
             const token = elements.token.value.trim();
@@ -521,9 +532,11 @@ club12345"></textarea>
             successCount = 0;
             failedCount = 0;
             failedGroups = [];
+            sentPosts = [];
             updateStats();
             clearLogsContainer('success');
             clearLogsContainer('failed');
+            updateRollbackState();
             
             // Показываем секцию логов
             elements.logsSection.style.display = 'block';
@@ -585,6 +598,13 @@ club12345"></textarea>
                         if (data.success) {
                             successCount++;
                             addLogSuccess(`✓ ${data.group}: успешно отправлено`, 'success');
+                            if (data.post_id && data.group_id) {
+                                sentPosts.push({
+                                    group_id: data.group_id,
+                                    post_id: data.post_id,
+                                    group_name: data.group
+                                });
+                            }
                         } else {
                             failedCount++;
                             // Сохраняем неуспешную группу
@@ -597,6 +617,7 @@ club12345"></textarea>
                             addLogFailed(`✗ ${data.group}: ${data.error || data.status}`, 'warning');
                         }
                         updateStats();
+                        updateRollbackState();
                         break;
                     
                     case 'complete':
@@ -607,6 +628,7 @@ club12345"></textarea>
                                 addLogFailed(`Ошибки: ${data.failed_count}`, 'warning');
                             }
                         }
+                        updateRollbackState();
                         eventSource.close();
                         resetControls();
                         break;
@@ -656,6 +678,14 @@ club12345"></textarea>
         function updateStats() {
             elements.statSuccess.textContent = successCount;
             elements.statFailed.textContent = failedCount;
+        }
+
+        function updateRollbackState() {
+            const hasPosts = sentPosts.length > 0;
+            elements.btnRollback.disabled = !hasPosts;
+            elements.rollbackHint.textContent = hasPosts
+                ? `Доступно к удалению: ${sentPosts.length} постов`
+                : 'Удалит отправленные посты этой сессии';
         }
 
         // === Раздельное логирование ===
@@ -726,6 +756,48 @@ club12345"></textarea>
             }, 2000);
         });
 
+        // === Откат рассылки ===
+        async function rollbackPosts() {
+            if (sentPosts.length === 0) {
+                alert('Нет постов для удаления');
+                return;
+            }
+            const token = elements.token.value.trim();
+            if (!token) {
+                alert('Введите токен VK');
+                return;
+            }
+            if (!confirm(`Удалить ${sentPosts.length} отправленных постов?`)) {
+                return;
+            }
+            elements.btnRollback.disabled = true;
+            elements.btnRollback.textContent = '⏳ Откат...';
+            try {
+                const response = await fetch('/api/rollback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token,
+                        posts: sentPosts
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    addLogSuccess(`Откат: удалено ${data.deleted}/${data.total}`, 'info');
+                    alert(`Откат завершён\nУдалено: ${data.deleted}\nОшибок: ${data.failed}`);
+                } else {
+                    addLogFailed('Ошибка отката: ' + data.error, 'error');
+                    alert('Ошибка отката: ' + data.error);
+                }
+            } catch (error) {
+                addLogFailed('Ошибка отката: ' + error.message, 'error');
+                alert('Ошибка отката: ' + error.message);
+            } finally {
+                elements.btnRollback.disabled = false;
+                elements.btnRollback.textContent = '↩️ Откатить рассылку';
+            }
+        }
+
         // === Автоподписка на паблики ===
         elements.btnAutoSubscribe.addEventListener('click', async () => {
             if (failedGroups.length === 0) {
@@ -784,6 +856,7 @@ club12345"></textarea>
         });
 
         // Инициализация - сразу генерируем ссылку
+        updateRollbackState();
         elements.btnGenerateUrl.click();
     </script>
 </body>
