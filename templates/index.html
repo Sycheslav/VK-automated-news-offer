@@ -70,6 +70,16 @@
                         <div class="photo-previews" id="photo-previews"></div>
                     </div>
                 </div>
+
+                <div class="form-group">
+                    <label for="photo-links">Ссылки на фото VK (каждая с новой строки):</label>
+                    <textarea id="photo-links" rows="3" placeholder="Вставьте ссылки на фото VK, например:
+https://vk.com/photo-55345266_457247067
+photo-55345266_457247067
+https://vk.com/rassilaym?z=photo-55345266_457247067"></textarea>
+                    <small>Поддерживаются ссылки на фото в формате photo{owner_id}_{id} или полные URL</small>
+                    <div class="parsed-photos" id="parsed-photos"></div>
+                </div>
             </section>
 
             <!-- Секция списка групп -->
@@ -133,12 +143,48 @@ club12345"></textarea>
                     </div>
                 </div>
 
-                <div class="logs-container">
-                    <div class="logs-header">
-                        <span>Логи</span>
-                        <button type="button" id="btn-clear-logs" class="btn btn-small">Очистить</button>
+                <div class="logs-split-container">
+                    <!-- Успешные логи (слева) -->
+                    <div class="logs-container logs-success-container">
+                        <div class="logs-header logs-header-success">
+                            <span>✅ Успешные</span>
+                            <button type="button" id="btn-clear-success-logs" class="btn btn-small">Очистить</button>
+                        </div>
+                        <div class="logs" id="logs-success"></div>
                     </div>
-                    <div class="logs" id="logs"></div>
+
+                    <!-- Неуспешные логи (справа) -->
+                    <div class="logs-container logs-failed-container">
+                        <div class="logs-header logs-header-failed">
+                            <span>❌ Неуспешные</span>
+                            <button type="button" id="btn-clear-failed-logs" class="btn btn-small">Очистить</button>
+                        </div>
+                        <div class="logs" id="logs-failed"></div>
+                        <div class="logs-actions">
+                            <button type="button" id="btn-get-failed-list" class="btn btn-secondary">
+                                📋 Получить список пабликов
+                            </button>
+                            <button type="button" id="btn-auto-subscribe" class="btn btn-primary">
+                                👥 Автоподписаться на паблики
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Модальное окно для списка неуспешных -->
+                <div id="failed-list-modal" class="modal" style="display: none;">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>Список неуспешных пабликов</h3>
+                            <button type="button" class="modal-close" id="modal-close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <textarea id="failed-list-text" rows="10" readonly></textarea>
+                            <button type="button" id="btn-copy-failed-list" class="btn btn-secondary">
+                                📋 Копировать список
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>
@@ -153,8 +199,10 @@ club12345"></textarea>
         let currentTaskId = null;
         let eventSource = null;
         let uploadedPhotos = [];
+        let parsedPhotoLinks = [];  // Ссылки на фото VK
         let successCount = 0;
         let failedCount = 0;
+        let failedGroups = [];  // Список неуспешных групп
 
         // Элементы DOM
         const elements = {
@@ -172,6 +220,8 @@ club12345"></textarea>
             photoUploadArea: document.getElementById('photo-upload-area'),
             uploadPlaceholder: document.getElementById('upload-placeholder'),
             photoPreviews: document.getElementById('photo-previews'),
+            photoLinks: document.getElementById('photo-links'),
+            parsedPhotos: document.getElementById('parsed-photos'),
             groups: document.getElementById('groups'),
             delay: document.getElementById('delay'),
             btnStart: document.getElementById('btn-start'),
@@ -181,8 +231,16 @@ club12345"></textarea>
             progressText: document.getElementById('progress-text'),
             statSuccess: document.getElementById('stat-success'),
             statFailed: document.getElementById('stat-failed'),
-            logs: document.getElementById('logs'),
-            btnClearLogs: document.getElementById('btn-clear-logs')
+            logsSuccess: document.getElementById('logs-success'),
+            logsFailed: document.getElementById('logs-failed'),
+            btnClearSuccessLogs: document.getElementById('btn-clear-success-logs'),
+            btnClearFailedLogs: document.getElementById('btn-clear-failed-logs'),
+            btnGetFailedList: document.getElementById('btn-get-failed-list'),
+            btnAutoSubscribe: document.getElementById('btn-auto-subscribe'),
+            failedListModal: document.getElementById('failed-list-modal'),
+            failedListText: document.getElementById('failed-list-text'),
+            btnCopyFailedList: document.getElementById('btn-copy-failed-list'),
+            modalClose: document.getElementById('modal-close')
         };
 
         // Генерация OAuth URL
@@ -203,7 +261,6 @@ club12345"></textarea>
                     elements.oauthLinkText.value = data.url;
                     elements.oauthLinkContainer.style.display = 'block';
                     
-                    // Визуальная обратная связь
                     elements.btnGenerateUrl.textContent = '✓ Ссылка сгенерирована';
                     elements.btnGenerateUrl.style.background = '#10b981';
                     setTimeout(() => {
@@ -220,7 +277,6 @@ club12345"></textarea>
         elements.token.addEventListener('input', async () => {
             let token = elements.token.value.trim();
             
-            // Извлекаем токен из URL если нужно
             if (token.includes('access_token=')) {
                 const match = token.match(/access_token=([^&]+)/);
                 if (match) {
@@ -234,7 +290,6 @@ club12345"></textarea>
                 return;
             }
             
-            // Проверяем токен
             try {
                 const response = await fetch('/api/verify-token', {
                     method: 'POST',
@@ -262,6 +317,78 @@ club12345"></textarea>
         elements.message.addEventListener('input', () => {
             elements.charCount.textContent = elements.message.value.length;
         });
+
+        // === Парсинг ссылок на фото VK ===
+        elements.photoLinks.addEventListener('input', () => {
+            parsePhotoLinks();
+        });
+
+        function parsePhotoLinks() {
+            const text = elements.photoLinks.value;
+            const lines = text.split('\n').filter(l => l.trim());
+            parsedPhotoLinks = [];
+            
+            for (const line of lines) {
+                const attachment = extractPhotoAttachment(line.trim());
+                if (attachment && !parsedPhotoLinks.includes(attachment)) {
+                    parsedPhotoLinks.push(attachment);
+                }
+            }
+            
+            renderParsedPhotos();
+        }
+
+        function extractPhotoAttachment(text) {
+            // Форматы:
+            // photo-55345266_457247067
+            // https://vk.com/photo-55345266_457247067
+            // https://vk.com/rassilaym?z=photo-55345266_457247067%2F...
+            // photo55345266_457247067 (без минуса для личных фото)
+            
+            // Паттерн для извлечения photo{owner_id}_{id}
+            const patterns = [
+                /photo(-?\d+)_(\d+)/i,  // основной формат
+            ];
+            
+            for (const pattern of patterns) {
+                const match = text.match(pattern);
+                if (match) {
+                    const ownerId = match[1];
+                    const photoId = match[2];
+                    return `photo${ownerId}_${photoId}`;
+                }
+            }
+            
+            return null;
+        }
+
+        function renderParsedPhotos() {
+            elements.parsedPhotos.innerHTML = '';
+            
+            for (const attachment of parsedPhotoLinks) {
+                const tag = document.createElement('span');
+                tag.className = 'parsed-photo-tag';
+                tag.innerHTML = `
+                    📷 ${attachment}
+                    <span class="remove" onclick="removePhotoLink('${attachment}')">&times;</span>
+                `;
+                elements.parsedPhotos.appendChild(tag);
+            }
+        }
+
+        function removePhotoLink(attachment) {
+            parsedPhotoLinks = parsedPhotoLinks.filter(a => a !== attachment);
+            
+            // Обновляем textarea
+            const lines = elements.photoLinks.value.split('\n');
+            const filteredLines = lines.filter(line => {
+                const extracted = extractPhotoAttachment(line.trim());
+                return extracted !== attachment;
+            });
+            elements.photoLinks.value = filteredLines.join('\n');
+            
+            renderParsedPhotos();
+        }
 
         // Загрузка фото - клик
         elements.uploadPlaceholder.addEventListener('click', () => {
@@ -291,7 +418,7 @@ club12345"></textarea>
         async function handleFiles(files) {
             for (const file of files) {
                 if (uploadedPhotos.length >= 10) {
-                    addLog('Максимум 10 фотографий', 'warning');
+                    addLogSuccess('Максимум 10 фотографий', 'warning');
                     break;
                 }
                 
@@ -312,10 +439,10 @@ club12345"></textarea>
                         uploadedPhotos.push(data.filename);
                         addPhotoPreview(file, data.filename);
                     } else {
-                        addLog('Ошибка загрузки: ' + data.error, 'error');
+                        addLogFailed('Ошибка загрузки: ' + data.error, 'error');
                     }
                 } catch (error) {
-                    addLog('Ошибка загрузки фото: ' + error.message, 'error');
+                    addLogFailed('Ошибка загрузки фото: ' + error.message, 'error');
                 }
             }
             
@@ -356,16 +483,20 @@ club12345"></textarea>
             elements.uploadPlaceholder.style.display = uploadedPhotos.length >= 10 ? 'none' : 'flex';
         }
 
-        // Запуск отправки
+        // === Управление отправкой ===
         elements.btnStart.addEventListener('click', startPosting);
         elements.btnStop.addEventListener('click', stopPosting);
-        elements.btnClearLogs.addEventListener('click', clearLogs);
+        elements.btnClearSuccessLogs.addEventListener('click', () => clearLogsContainer('success'));
+        elements.btnClearFailedLogs.addEventListener('click', () => clearLogsContainer('failed'));
 
         async function startPosting() {
             const token = elements.token.value.trim();
             const message = elements.message.value.trim();
             const groups = elements.groups.value.trim();
             const delay = parseFloat(elements.delay.value) || 0.5;
+            
+            // Обновляем parsedPhotoLinks
+            parsePhotoLinks();
             
             // Валидация
             if (!token) {
@@ -374,7 +505,7 @@ club12345"></textarea>
                 return;
             }
             
-            if (!message && uploadedPhotos.length === 0) {
+            if (!message && uploadedPhotos.length === 0 && parsedPhotoLinks.length === 0) {
                 alert('Введите текст поста или добавьте фото');
                 elements.message.focus();
                 return;
@@ -389,8 +520,10 @@ club12345"></textarea>
             // Сброс статистики
             successCount = 0;
             failedCount = 0;
+            failedGroups = [];
             updateStats();
-            clearLogs();
+            clearLogsContainer('success');
+            clearLogsContainer('failed');
             
             // Показываем секцию логов
             elements.logsSection.style.display = 'block';
@@ -406,6 +539,7 @@ club12345"></textarea>
                         message,
                         groups,
                         photos: uploadedPhotos,
+                        photo_links: parsedPhotoLinks,  // Добавляем ссылки на фото
                         delay
                     })
                 });
@@ -414,14 +548,14 @@ club12345"></textarea>
                 
                 if (data.success) {
                     currentTaskId = data.task_id;
-                    addLog(`Запущена отправка в ${data.groups_count} групп`, 'info');
+                    addLogSuccess(`Запущена отправка в ${data.groups_count} групп`, 'info');
                     startLogStream(data.task_id);
                 } else {
-                    addLog('Ошибка: ' + data.error, 'error');
+                    addLogFailed('Ошибка: ' + data.error, 'error');
                     resetControls();
                 }
             } catch (error) {
-                addLog('Ошибка запуска: ' + error.message, 'error');
+                addLogFailed('Ошибка запуска: ' + error.message, 'error');
                 resetControls();
             }
         }
@@ -438,30 +572,47 @@ club12345"></textarea>
                 
                 switch (data.type) {
                     case 'log':
-                        addLog(data.message, data.level);
+                        // Определяем куда направить лог по уровню
+                        if (data.level === 'error' || data.level === 'warning') {
+                            addLogFailed(data.message, data.level);
+                        } else {
+                            addLogSuccess(data.message, data.level);
+                        }
                         break;
                     
                     case 'result':
                         updateProgress(data.current, data.total);
                         if (data.success) {
                             successCount++;
+                            addLogSuccess(`✓ ${data.group}: успешно отправлено`, 'success');
                         } else {
                             failedCount++;
+                            // Сохраняем неуспешную группу
+                            failedGroups.push({
+                                name: data.group,
+                                status: data.status,
+                                error: data.error,
+                                group_id: data.group_id
+                            });
+                            addLogFailed(`✗ ${data.group}: ${data.error || data.status}`, 'warning');
                         }
                         updateStats();
                         break;
                     
                     case 'complete':
-                        addLog('═══ Отправка завершена ═══', 'info');
+                        addLogSuccess('═══ Отправка завершена ═══', 'info');
                         if (data.success) {
-                            addLog(`Успешно: ${data.success_count}, Ошибки: ${data.failed_count}`, 'info');
+                            addLogSuccess(`Успешно: ${data.success_count}`, 'info');
+                            if (data.failed_count > 0) {
+                                addLogFailed(`Ошибки: ${data.failed_count}`, 'warning');
+                            }
                         }
                         eventSource.close();
                         resetControls();
                         break;
                     
                     case 'error':
-                        addLog(data.message, 'error');
+                        addLogFailed(data.message, 'error');
                         eventSource.close();
                         resetControls();
                         break;
@@ -469,7 +620,7 @@ club12345"></textarea>
             };
             
             eventSource.onerror = () => {
-                addLog('Соединение потеряно', 'warning');
+                addLogFailed('Соединение потеряно', 'warning');
                 eventSource.close();
                 resetControls();
             };
@@ -484,9 +635,9 @@ club12345"></textarea>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ task_id: currentTaskId })
                 });
-                addLog('Остановка...', 'warning');
+                addLogFailed('Остановка...', 'warning');
             } catch (error) {
-                addLog('Ошибка остановки: ' + error.message, 'error');
+                addLogFailed('Ошибка остановки: ' + error.message, 'error');
             }
         }
 
@@ -507,19 +658,33 @@ club12345"></textarea>
             elements.statFailed.textContent = failedCount;
         }
 
-        function addLog(message, level = 'info') {
+        // === Раздельное логирование ===
+        function addLogSuccess(message, level = 'info') {
+            addLogToContainer(elements.logsSuccess, message, level);
+        }
+
+        function addLogFailed(message, level = 'info') {
+            addLogToContainer(elements.logsFailed, message, level);
+        }
+
+        function addLogToContainer(container, message, level) {
             const log = document.createElement('div');
             log.className = `log-entry log-${level}`;
             
             const time = new Date().toLocaleTimeString();
             log.innerHTML = `<span class="log-time">[${time}]</span> ${escapeHtml(message)}`;
             
-            elements.logs.appendChild(log);
-            elements.logs.scrollTop = elements.logs.scrollHeight;
+            container.appendChild(log);
+            container.scrollTop = container.scrollHeight;
         }
 
-        function clearLogs() {
-            elements.logs.innerHTML = '';
+        function clearLogsContainer(type) {
+            if (type === 'success') {
+                elements.logsSuccess.innerHTML = '';
+            } else if (type === 'failed') {
+                elements.logsFailed.innerHTML = '';
+                failedGroups = [];
+            }
             updateProgress(0, 0);
         }
 
@@ -528,6 +693,95 @@ club12345"></textarea>
             div.textContent = text;
             return div.innerHTML;
         }
+
+        // === Модальное окно неуспешных пабликов ===
+        elements.btnGetFailedList.addEventListener('click', () => {
+            if (failedGroups.length === 0) {
+                alert('Список неуспешных пабликов пуст');
+                return;
+            }
+            
+            const list = failedGroups.map(g => g.name).join('\n');
+            elements.failedListText.value = list;
+            elements.failedListModal.style.display = 'flex';
+        });
+
+        elements.modalClose.addEventListener('click', () => {
+            elements.failedListModal.style.display = 'none';
+        });
+
+        elements.failedListModal.addEventListener('click', (e) => {
+            if (e.target === elements.failedListModal) {
+                elements.failedListModal.style.display = 'none';
+            }
+        });
+
+        elements.btnCopyFailedList.addEventListener('click', () => {
+            elements.failedListText.select();
+            document.execCommand('copy');
+            
+            elements.btnCopyFailedList.textContent = '✓ Скопировано!';
+            setTimeout(() => {
+                elements.btnCopyFailedList.textContent = '📋 Копировать список';
+            }, 2000);
+        });
+
+        // === Автоподписка на паблики ===
+        elements.btnAutoSubscribe.addEventListener('click', async () => {
+            if (failedGroups.length === 0) {
+                alert('Список неуспешных пабликов пуст');
+                return;
+            }
+            
+            const token = elements.token.value.trim();
+            if (!token) {
+                alert('Введите токен VK');
+                return;
+            }
+            
+            const groupIds = failedGroups
+                .filter(g => g.group_id)
+                .map(g => g.group_id);
+            
+            if (groupIds.length === 0) {
+                alert('Нет доступных ID групп для подписки');
+                return;
+            }
+            
+            if (!confirm(`Подписаться на ${groupIds.length} пабликов?`)) {
+                return;
+            }
+            
+            elements.btnAutoSubscribe.disabled = true;
+            elements.btnAutoSubscribe.textContent = '⏳ Подписка...';
+            
+            try {
+                const response = await fetch('/api/auto-subscribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token,
+                        group_ids: groupIds
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addLogSuccess(`Подписка завершена: ${data.subscribed}/${data.total} успешно`, 'info');
+                    alert(`Подписка завершена!\nУспешно: ${data.subscribed}\nОшибок: ${data.failed}`);
+                } else {
+                    addLogFailed('Ошибка подписки: ' + data.error, 'error');
+                    alert('Ошибка подписки: ' + data.error);
+                }
+            } catch (error) {
+                addLogFailed('Ошибка подписки: ' + error.message, 'error');
+                alert('Ошибка подписки: ' + error.message);
+            } finally {
+                elements.btnAutoSubscribe.disabled = false;
+                elements.btnAutoSubscribe.textContent = '👥 Автоподписаться на паблики';
+            }
+        });
 
         // Инициализация - сразу генерируем ссылку
         elements.btnGenerateUrl.click();

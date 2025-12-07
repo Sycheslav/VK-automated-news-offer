@@ -132,12 +132,13 @@ def api_start_posting():
     message = data.get('message', '').strip()
     groups_text = data.get('groups', '').strip()
     photos = data.get('photos', [])
+    photo_links = data.get('photo_links', [])  # Ссылки на фото VK
     delay = float(data.get('delay', 0.5))
     
     if not token:
         return jsonify({'error': 'Токен не указан'}), 400
     
-    if not message and not photos:
+    if not message and not photos and not photo_links:
         return jsonify({'error': 'Укажите текст или добавьте фото'}), 400
     
     if not groups_text:
@@ -162,7 +163,7 @@ def api_start_posting():
     # Запускаем в отдельном потоке
     thread = threading.Thread(
         target=run_posting_task,
-        args=(task_id, token, message, groups, photos, delay)
+        args=(task_id, token, message, groups, photos, photo_links, delay)
     )
     thread.daemon = True
     thread.start()
@@ -185,6 +186,54 @@ def api_stop_posting():
         return jsonify({'success': True})
     
     return jsonify({'error': 'Задача не найдена'}), 404
+
+
+@app.route('/api/auto-subscribe', methods=['POST'])
+def api_auto_subscribe():
+    """Автоматическая подписка на список групп."""
+    data = request.get_json()
+    token = data.get('token', '').strip()
+    group_ids = data.get('group_ids', [])
+    
+    if not token:
+        return jsonify({'error': 'Токен не указан'}), 400
+    
+    if not group_ids:
+        return jsonify({'error': 'Список групп пуст'}), 400
+    
+    try:
+        suggester = VKSuggester(access_token=token, request_delay=0.5)
+        
+        subscribed = 0
+        failed = 0
+        errors = []
+        
+        for gid in group_ids:
+            try:
+                result = suggester.join_group(gid)
+                if result:
+                    subscribed += 1
+                else:
+                    failed += 1
+            except VKApiError as e:
+                failed += 1
+                errors.append(f"Группа {gid}: {e.message}")
+            except Exception as e:
+                failed += 1
+                errors.append(f"Группа {gid}: {str(e)}")
+        
+        return jsonify({
+            'success': True,
+            'total': len(group_ids),
+            'subscribed': subscribed,
+            'failed': failed,
+            'errors': errors[:10]  # Первые 10 ошибок
+        })
+        
+    except VKApiError as e:
+        return jsonify({'success': False, 'error': f'Ошибка VK API: {e.message}'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/logs/<task_id>')
@@ -221,7 +270,7 @@ def api_logs_stream(task_id):
     )
 
 
-def run_posting_task(task_id, token, message, groups, photos, delay):
+def run_posting_task(task_id, token, message, groups, photos, photo_links, delay):
     """Выполнение задачи отправки постов в отдельном потоке."""
     q = log_queues[task_id]
     
@@ -251,10 +300,17 @@ def run_posting_task(task_id, token, message, groups, photos, delay):
             q.put({'type': 'complete', 'success': False, 'error': str(e)})
             return
         
-        # Загружаем фото на VK (если есть)
+        # Собираем вложения
         attachments = []
+        
+        # Добавляем ссылки на существующие фото VK (если есть)
+        if photo_links:
+            log_callback(f"Добавлено {len(photo_links)} ссылок на фото VK")
+            attachments.extend(photo_links)
+        
+        # Загружаем локальные фото на VK (если есть)
         if photos:
-            log_callback(f"Загрузка {len(photos)} фото на VK...")
+            log_callback(f"Загрузка {len(photos)} локальных фото на VK...")
             for photo_file in photos:
                 if active_tasks.get(task_id, {}).get('stop'):
                     log_callback("Остановлено пользователем", "warning")
@@ -273,6 +329,9 @@ def run_posting_task(task_id, token, message, groups, photos, delay):
                         log_callback(f"Не удалось загрузить фото: {photo_file}", "warning")
         
         attachments_str = ','.join(attachments) if attachments else None
+        
+        if attachments_str:
+            log_callback(f"Итого вложений: {len(attachments)}")
         
         # Отправляем посты
         results = []
@@ -309,8 +368,10 @@ def run_posting_task(task_id, token, message, groups, photos, delay):
                     'current': i + 1,
                     'total': len(resolved),
                     'group': group_name,
+                    'group_id': gid,
                     'status': 'suggest_disabled',
-                    'success': False
+                    'success': False,
+                    'error': 'Предложка закрыта'
                 })
                 continue
             
@@ -326,6 +387,7 @@ def run_posting_task(task_id, token, message, groups, photos, delay):
                     'current': i + 1,
                     'total': len(resolved),
                     'group': group_name,
+                    'group_id': gid,
                     'status': 'success',
                     'success': True,
                     'post_id': result.post_id
@@ -338,6 +400,7 @@ def run_posting_task(task_id, token, message, groups, photos, delay):
                     'current': i + 1,
                     'total': len(resolved),
                     'group': group_name,
+                    'group_id': gid,
                     'status': result.status.value,
                     'success': False,
                     'error': error_msg

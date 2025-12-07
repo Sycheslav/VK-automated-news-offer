@@ -378,6 +378,26 @@ class VKSuggester:
         
         return None
     
+    def join_group(self, group_id: int) -> bool:
+        """
+        Подписка на сообщество.
+        
+        Args:
+            group_id: ID группы (положительное число)
+            
+        Returns:
+            True если подписка успешна, False при ошибке
+        """
+        try:
+            response = self._api_request("groups.join", {
+                "group_id": group_id
+            })
+            # Успешный ответ: {"response": 1}
+            return response == 1
+        except VKApiError as e:
+            self._log(f"Ошибка подписки на группу {group_id}: {e.message}", "warning")
+            raise
+    
     def post_to_suggestion(
         self,
         group_id: int,
