@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VK Suggester — Отправка в предложку</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 VK Suggester</h1>
+            <p class="subtitle">Массовая отправка постов в предложку сообществ</p>
+        </header>
+
+        <main>
+            <!-- Секция авторизации -->
+            <section class="card">
+                <h2>🔑 Авторизация</h2>
+                
+                <div class="form-group">
+                    <label for="app-id">ID приложения VK:</label>
+                    <div class="input-row">
+                        <input type="number" id="app-id" value="6121396" placeholder="ID приложения">
+                        <button type="button" id="btn-generate-url" class="btn btn-secondary">
+                            Сгенерировать ссылку
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group" id="oauth-link-container" style="display: none;">
+                    <label>Ссылка для получения токена:</label>
+                    <div class="oauth-link-box">
+                        <input type="text" id="oauth-link-text" readonly class="oauth-url-display" placeholder="Ссылка появится здесь...">
+                        <a href="#" id="oauth-link" target="_blank" class="btn btn-secondary">Открыть авторизацию VK</a>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="token">Токен VK:</label>
+                    <small class="warning-text" style="display: block; margin-bottom: 8px;">
+                        ⚠️ Авторизуйтесь в приложении, затем скопируйте URL из адресной строки и вставьте в поле ниже.<br>
+                        <strong>ОСТОРОЖНО:</strong> Этот токен используется для управления вашей страницей, поэтому <strong>НИ С КЕМ НЕ ДЕЛИТЕСЬ ИМ!</strong>
+                    </small>
+                    <input type="text" id="token" placeholder="Вставьте access_token или полный URL">
+                    <div id="user-info" class="user-info" style="display: none;">
+                        <span class="user-badge">👤 <span id="user-name"></span></span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Секция редактора поста -->
+            <section class="card">
+                <h2>📝 Редактор поста</h2>
+                
+                <div class="form-group">
+                    <label for="message">Текст поста:</label>
+                    <textarea id="message" rows="6" placeholder="Введите текст поста для предложки..."></textarea>
+                    <small class="char-count"><span id="char-count">0</span> символов</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Фотографии (до 10 штук):</label>
+                    <div class="photo-upload-area" id="photo-upload-area">
+                        <input type="file" id="photo-input" multiple accept="image/*" style="display: none;">
+                        <div class="upload-placeholder" id="upload-placeholder">
+                            <span class="upload-icon">📷</span>
+                            <span>Нажмите или перетащите фото сюда</span>
+                        </div>
+                        <div class="photo-previews" id="photo-previews"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Секция списка групп -->
+            <section class="card">
+                <h2>👥 Список сообществ</h2>
+                
+                <div class="form-group">
+                    <label for="groups">ID или короткие адреса групп:</label>
+                    <textarea id="groups" rows="5" placeholder="Вставьте ID или ссылки на группы через запятую, пробел или с новой строки:
+
+durov
+123456789
+https://vk.com/team
+club12345"></textarea>
+                    <small>Поддерживаются: числовые ID, короткие адреса, ссылки vk.com</small>
+                </div>
+            </section>
+
+            <!-- Настройки -->
+            <section class="card">
+                <h2>⚙️ Настройки</h2>
+                
+                <div class="settings-row">
+                    <div class="form-group">
+                        <label for="delay">Задержка между запросами (сек):</label>
+                        <input type="number" id="delay" value="1" min="0.3" max="10" step="0.1">
+                        <small>Рекомендуется 0.5-1 сек для безопасности</small>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Кнопки управления -->
+            <section class="controls">
+                <button type="button" id="btn-start" class="btn btn-primary btn-large">
+                    ▶️ Запустить отправку
+                </button>
+                <button type="button" id="btn-stop" class="btn btn-danger btn-large" style="display: none;">
+                    ⏹️ Остановить
+                </button>
+            </section>
+
+            <!-- Прогресс и логи -->
+            <section class="card" id="logs-section" style="display: none;">
+                <h2>📊 Результаты</h2>
+                
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <div class="progress-text" id="progress-text">0 / 0</div>
+                </div>
+
+                <div class="stats-row" id="stats-row">
+                    <div class="stat-box stat-success">
+                        <span class="stat-value" id="stat-success">0</span>
+                        <span class="stat-label">Успешно</span>
+                    </div>
+                    <div class="stat-box stat-failed">
+                        <span class="stat-value" id="stat-failed">0</span>
+                        <span class="stat-label">Ошибки</span>
+                    </div>
+                </div>
+
+                <div class="logs-container">
+                    <div class="logs-header">
+                        <span>Логи</span>
+                        <button type="button" id="btn-clear-logs" class="btn btn-small">Очистить</button>
+                    </div>
+                    <div class="logs" id="logs"></div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>VK Suggester v1.0 — Инструмент для волонтёрских рассылок</p>
+        </footer>
+    </div>
+
+    <script>
+        // Глобальные переменные
+        let currentTaskId = null;
+        let eventSource = null;
+        let uploadedPhotos = [];
+        let successCount = 0;
+        let failedCount = 0;
+
+        // Элементы DOM
+        const elements = {
+            appId: document.getElementById('app-id'),
+            btnGenerateUrl: document.getElementById('btn-generate-url'),
+            oauthLinkContainer: document.getElementById('oauth-link-container'),
+            oauthLink: document.getElementById('oauth-link'),
+            oauthLinkText: document.getElementById('oauth-link-text'),
+            token: document.getElementById('token'),
+            userInfo: document.getElementById('user-info'),
+            userName: document.getElementById('user-name'),
+            message: document.getElementById('message'),
+            charCount: document.getElementById('char-count'),
+            photoInput: document.getElementById('photo-input'),
+            photoUploadArea: document.getElementById('photo-upload-area'),
+            uploadPlaceholder: document.getElementById('upload-placeholder'),
+            photoPreviews: document.getElementById('photo-previews'),
+            groups: document.getElementById('groups'),
+            delay: document.getElementById('delay'),
+            btnStart: document.getElementById('btn-start'),
+            btnStop: document.getElementById('btn-stop'),
+            logsSection: document.getElementById('logs-section'),
+            progressFill: document.getElementById('progress-fill'),
+            progressText: document.getElementById('progress-text'),
+            statSuccess: document.getElementById('stat-success'),
+            statFailed: document.getElementById('stat-failed'),
+            logs: document.getElementById('logs'),
+            btnClearLogs: document.getElementById('btn-clear-logs')
+        };
+
+        // Генерация OAuth URL
+        elements.btnGenerateUrl.addEventListener('click', async () => {
+            const appId = elements.appId.value || 6121396;
+            
+            try {
+                const response = await fetch('/api/generate-oauth-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ client_id: appId })
+                });
+                
+                const data = await response.json();
+                
+                if (data.url) {
+                    elements.oauthLink.href = data.url;
+                    elements.oauthLinkText.value = data.url;
+                    elements.oauthLinkContainer.style.display = 'block';
+                    
+                    // Визуальная обратная связь
+                    elements.btnGenerateUrl.textContent = '✓ Ссылка сгенерирована';
+                    elements.btnGenerateUrl.style.background = '#10b981';
+                    setTimeout(() => {
+                        elements.btnGenerateUrl.textContent = 'Сгенерировать ссылку';
+                        elements.btnGenerateUrl.style.background = '';
+                    }, 2000);
+                }
+            } catch (error) {
+                alert('Ошибка генерации ссылки: ' + error.message);
+            }
+        });
+
+        // Обработка вставки токена
+        elements.token.addEventListener('input', async () => {
+            let token = elements.token.value.trim();
+            
+            // Извлекаем токен из URL если нужно
+            if (token.includes('access_token=')) {
+                const match = token.match(/access_token=([^&]+)/);
+                if (match) {
+                    token = match[1];
+                    elements.token.value = token;
+                }
+            }
+            
+            if (token.length < 50) {
+                elements.userInfo.style.display = 'none';
+                return;
+            }
+            
+            // Проверяем токен
+            try {
+                const response = await fetch('/api/verify-token', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    elements.userName.textContent = data.user.name;
+                    elements.userInfo.style.display = 'block';
+                    elements.userInfo.classList.remove('error');
+                } else {
+                    elements.userName.textContent = data.error;
+                    elements.userInfo.style.display = 'block';
+                    elements.userInfo.classList.add('error');
+                }
+            } catch (error) {
+                elements.userInfo.style.display = 'none';
+            }
+        });
+
+        // Счётчик символов
+        elements.message.addEventListener('input', () => {
+            elements.charCount.textContent = elements.message.value.length;
+        });
+
+        // Загрузка фото - клик
+        elements.uploadPlaceholder.addEventListener('click', () => {
+            elements.photoInput.click();
+        });
+
+        // Drag & Drop
+        elements.photoUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            elements.photoUploadArea.classList.add('dragover');
+        });
+
+        elements.photoUploadArea.addEventListener('dragleave', () => {
+            elements.photoUploadArea.classList.remove('dragover');
+        });
+
+        elements.photoUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            elements.photoUploadArea.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        elements.photoInput.addEventListener('change', () => {
+            handleFiles(elements.photoInput.files);
+        });
+
+        async function handleFiles(files) {
+            for (const file of files) {
+                if (uploadedPhotos.length >= 10) {
+                    addLog('Максимум 10 фотографий', 'warning');
+                    break;
+                }
+                
+                if (!file.type.startsWith('image/')) continue;
+                
+                const formData = new FormData();
+                formData.append('photo', file);
+                
+                try {
+                    const response = await fetch('/api/upload-photo', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        uploadedPhotos.push(data.filename);
+                        addPhotoPreview(file, data.filename);
+                    } else {
+                        addLog('Ошибка загрузки: ' + data.error, 'error');
+                    }
+                } catch (error) {
+                    addLog('Ошибка загрузки фото: ' + error.message, 'error');
+                }
+            }
+            
+            updatePhotoPlaceholder();
+        }
+
+        function addPhotoPreview(file, filename) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const preview = document.createElement('div');
+                preview.className = 'photo-preview';
+                preview.dataset.filename = filename;
+                preview.innerHTML = `
+                    <img src="${e.target.result}" alt="Preview">
+                    <button type="button" class="photo-remove" onclick="removePhoto('${filename}')">&times;</button>
+                `;
+                elements.photoPreviews.appendChild(preview);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function removePhoto(filename) {
+            try {
+                await fetch('/api/remove-photo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename })
+                });
+            } catch (e) {}
+            
+            uploadedPhotos = uploadedPhotos.filter(f => f !== filename);
+            const preview = document.querySelector(`.photo-preview[data-filename="${filename}"]`);
+            if (preview) preview.remove();
+            updatePhotoPlaceholder();
+        }
+
+        function updatePhotoPlaceholder() {
+            elements.uploadPlaceholder.style.display = uploadedPhotos.length >= 10 ? 'none' : 'flex';
+        }
+
+        // Запуск отправки
+        elements.btnStart.addEventListener('click', startPosting);
+        elements.btnStop.addEventListener('click', stopPosting);
+        elements.btnClearLogs.addEventListener('click', clearLogs);
+
+        async function startPosting() {
+            const token = elements.token.value.trim();
+            const message = elements.message.value.trim();
+            const groups = elements.groups.value.trim();
+            const delay = parseFloat(elements.delay.value) || 0.5;
+            
+            // Валидация
+            if (!token) {
+                alert('Введите токен VK');
+                elements.token.focus();
+                return;
+            }
+            
+            if (!message && uploadedPhotos.length === 0) {
+                alert('Введите текст поста или добавьте фото');
+                elements.message.focus();
+                return;
+            }
+            
+            if (!groups) {
+                alert('Введите список групп');
+                elements.groups.focus();
+                return;
+            }
+            
+            // Сброс статистики
+            successCount = 0;
+            failedCount = 0;
+            updateStats();
+            clearLogs();
+            
+            // Показываем секцию логов
+            elements.logsSection.style.display = 'block';
+            elements.btnStart.style.display = 'none';
+            elements.btnStop.style.display = 'inline-flex';
+            
+            try {
+                const response = await fetch('/api/start-posting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        token,
+                        message,
+                        groups,
+                        photos: uploadedPhotos,
+                        delay
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentTaskId = data.task_id;
+                    addLog(`Запущена отправка в ${data.groups_count} групп`, 'info');
+                    startLogStream(data.task_id);
+                } else {
+                    addLog('Ошибка: ' + data.error, 'error');
+                    resetControls();
+                }
+            } catch (error) {
+                addLog('Ошибка запуска: ' + error.message, 'error');
+                resetControls();
+            }
+        }
+
+        function startLogStream(taskId) {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource(`/api/logs/${taskId}`);
+            
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                switch (data.type) {
+                    case 'log':
+                        addLog(data.message, data.level);
+                        break;
+                    
+                    case 'result':
+                        updateProgress(data.current, data.total);
+                        if (data.success) {
+                            successCount++;
+                        } else {
+                            failedCount++;
+                        }
+                        updateStats();
+                        break;
+                    
+                    case 'complete':
+                        addLog('═══ Отправка завершена ═══', 'info');
+                        if (data.success) {
+                            addLog(`Успешно: ${data.success_count}, Ошибки: ${data.failed_count}`, 'info');
+                        }
+                        eventSource.close();
+                        resetControls();
+                        break;
+                    
+                    case 'error':
+                        addLog(data.message, 'error');
+                        eventSource.close();
+                        resetControls();
+                        break;
+                }
+            };
+            
+            eventSource.onerror = () => {
+                addLog('Соединение потеряно', 'warning');
+                eventSource.close();
+                resetControls();
+            };
+        }
+
+        async function stopPosting() {
+            if (!currentTaskId) return;
+            
+            try {
+                await fetch('/api/stop-posting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_id: currentTaskId })
+                });
+                addLog('Остановка...', 'warning');
+            } catch (error) {
+                addLog('Ошибка остановки: ' + error.message, 'error');
+            }
+        }
+
+        function resetControls() {
+            elements.btnStart.style.display = 'inline-flex';
+            elements.btnStop.style.display = 'none';
+            currentTaskId = null;
+        }
+
+        function updateProgress(current, total) {
+            const percent = total > 0 ? (current / total * 100) : 0;
+            elements.progressFill.style.width = percent + '%';
+            elements.progressText.textContent = `${current} / ${total}`;
+        }
+
+        function updateStats() {
+            elements.statSuccess.textContent = successCount;
+            elements.statFailed.textContent = failedCount;
+        }
+
+        function addLog(message, level = 'info') {
+            const log = document.createElement('div');
+            log.className = `log-entry log-${level}`;
+            
+            const time = new Date().toLocaleTimeString();
+            log.innerHTML = `<span class="log-time">[${time}]</span> ${escapeHtml(message)}`;
+            
+            elements.logs.appendChild(log);
+            elements.logs.scrollTop = elements.logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            elements.logs.innerHTML = '';
+            updateProgress(0, 0);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Инициализация - сразу генерируем ссылку
+        elements.btnGenerateUrl.click();
+    </script>
+</body>
+</html>
